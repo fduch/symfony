@@ -11,7 +11,10 @@
 
 namespace Symfony\Bundle\FrameworkBundle\Test;
 
+use Symfony\Bundle\FrameworkBundle\Tests\Functional\Kernel\TestKernel;
+use Symfony\Bundle\FrameworkBundle\Tests\Functional\Kernel\TestKernelInterface;
 use Symfony\Component\DependencyInjection\ResettableContainerInterface;
+use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\Finder\Finder;
 use Symfony\Component\HttpKernel\KernelInterface;
 
@@ -105,6 +108,17 @@ abstract class KernelTestCase extends \PHPUnit_Framework_TestCase
      */
     protected static function getKernelClass()
     {
+        // check kernel class specified explicitly in phpunit.xml/phpunit.xml.dist
+        if (isset($_SERVER['KERNEL_CLASS'])) {
+            $kernelClass = $_SERVER['KERNEL_CLASS'];
+            if (!class_exists($kernelClass)) {
+                throw new \RuntimeException(sprintf('Test kernel class "%s" specified by KERNEL_CLASS in phpunit.xml does not exist', $_SERVER['KERNEL_CLASS']));
+            }
+
+            return $kernelClass;
+        }
+
+        // try to find kernel class in specified directory in phpunit.xml/phpunit.xml.dist
         if (isset($_SERVER['KERNEL_DIR'])) {
             $dir = $_SERVER['KERNEL_DIR'];
 
@@ -114,23 +128,59 @@ abstract class KernelTestCase extends \PHPUnit_Framework_TestCase
                     $dir = "$phpUnitDir/$dir";
                 }
             }
-        } else {
-            $dir = static::getPhpUnitXmlDir();
+
+            if ($kernelClass = static::findKernelClassInDirectory($dir)) {
+                throw new \RuntimeException(sprintf('There is no test kernel class in specified KERNEL_DIR "%s"', $_SERVER['KERNEL_CLASS']));
+            }
+
+            return $kernelClass;
         }
+
+        // try to find kernel class near phpunit.xml/phpunit.xml.dist files
+        if ($kernelClass = static::findKernelClassInDirectory(static::getPhpUnitXmlDir())) {
+            return $kernelClass;
+        }
+
+        // fallback to default kernel class
+        return static::getDefaultTestKernelClass();
+    }
+
+    /**
+     * Tries to find kernel class in directory. Returns null if no appropriative class found
+     *
+     * @param string $dir directory to be processed
+     *
+     * @return string|null
+     */
+    protected static function findKernelClassInDirectory($dir)
+    {
+        $kernelClass = null;
 
         $finder = new Finder();
         $finder->name('*Kernel.php')->depth(0)->in($dir);
         $results = iterator_to_array($finder);
-        if (!count($results)) {
-            throw new \RuntimeException('Either set KERNEL_DIR in your phpunit.xml according to https://symfony.com/doc/current/book/testing.html#your-first-functional-test or override the WebTestCase::createKernel() method.');
+        if (count($results)) {
+            $file = current($results);
+
+            $classes = get_declared_classes();
+            require_once $file;
+            $newClasses = array_diff(get_declared_classes(), $classes);
+            if ($newClasses) {
+                $kernelClass = reset($newClasses);
+            }
         }
 
-        $file = current($results);
-        $class = $file->getBasename('.php');
+        return $kernelClass;
+    }
 
-        require_once $file;
-
-        return $class;
+    /**
+     * Returns default test kernel class FQCN
+     *
+     * @var string
+     */
+    protected static function getDefaultTestKernelClass()
+    {
+        return TestKernel::class;
     }
 
     /**
@@ -164,10 +214,35 @@ abstract class KernelTestCase extends \PHPUnit_Framework_TestCase
             static::$class = static::getKernelClass();
         }
 
-        return new static::$class(
+        if (isset($_SERVER['KERNEL_ENV'])) {
+            $options['environment'] = $_SERVER['KERNEL_ENV'];
+        }
+
+        if (isset($_SERVER['KERNEL_DEBUG'])) {
+            $options['debug'] = $_SERVER['KERNEL_DEBUG'];
+        }
+
+        $kernel = new static::$class(
             isset($options['environment']) ? $options['environment'] : 'test',
             isset($options['debug']) ? $options['debug'] : true
         );
+
+        if ($kernel instanceof TestKernelInterface) {
+            if (!isset($options['test_case'])) {
+                throw new \InvalidArgumentException('The option "test_case" must be set.');
+            }
+            if (!isset($options['config_dir'])) {
+                throw new \InvalidArgumentException('The option "config_dir" must be set.');
+            }
+
+            $kernel->setTestKernelConfiguration(
+                $options['test_case'],
+                $options['config_dir'],
+                isset($options['root_config']) ? $options['root_config'] : 'config.yml',
+                isset($options['root_dir']) ? $options['root_dir'] : null);
+        }
+
+        return $kernel;
     }
 
     /**
@@ -177,9 +252,15 @@ abstract class KernelTestCase extends \PHPUnit_Framework_TestCase
     {
         if (null !== static::$kernel) {
             $container = static::$kernel->getContainer();
-            static::$kernel->shutdown();
+            $kernel    = static::$kernel;
+            $kernel->shutdown();
             if ($container instanceof ResettableContainerInterface) {
                 $container->reset();
+            }
+
+            if ($kernel instanceof TestKernelInterface) {
+                $fs = new Filesystem();
+                $fs->remove($kernel->getTempAppDir());
             }
         }
     }

@@ -18,14 +18,14 @@ class JsonLoginTest extends WebTestCase
 {
     public function testJsonLoginSuccess()
     {
-        $client = $this->createClient(array('test_case' => 'JsonLogin', 'root_config' => 'config.yml'));
+        $client = $this->createClient(array('test_case' => 'JsonLogin'));
         $client->request('POST', '/chk', array(), array(), array(), '{"user": {"login": "dunglas", "password": "foo"}}');
         $this->assertEquals('http://localhost/', $client->getResponse()->headers->get('location'));
     }
 
     public function testJsonLoginFailure()
     {
-        $client = $this->createClient(array('test_case' => 'JsonLogin', 'root_config' => 'config.yml'));
+        $client = $this->createClient(array('test_case' => 'JsonLogin'));
         $client->request('POST', '/chk', array(), array(), array(), '{"user": {"login": "dunglas", "password": "bad"}}');
         $this->assertEquals('http://localhost/login', $client->getResponse()->headers->get('location'));
     }
